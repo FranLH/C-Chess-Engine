@@ -10,6 +10,12 @@
     - Create function to check if the king is safe in a given state
         - Call this function before storing a move as valid
 
-        
+    
+    - Refactor valid moves function. First analize king safety to get unsafe squares, pieces that are checking the king and
+      pieces that are pinned. Then use those restrictions to generate valid moves.
+
     - Store chess.c as a chess.h, and have it only work as a portable chess engine. Then, create a main.c and main.exe to handle
       the interface and input/output
+
+
+    - REMEMBER TO PUSH TO MAIN AFTER FINISHING THE BRANCH

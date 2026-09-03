@@ -204,10 +204,11 @@ void makeMove(BoardState *state, Move *move);
 void printBoard(BoardState *state);
 void printMoves(BoardState *state, Move *moves, int move_count);
 Move* getAllValidBoardMoves(BoardState *state, int *move_count); // Generates all valid moves, updates a move counter variable in place and returns a pointer to the new Move array.
-void getAllValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int *count); // Modifies an array of moves in place with the valid moves of a piece. Updates the move count too
+void getAllPseudoValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int *count); // Modifies an array of moves in place with the valid moves of a piece. Updates the move count too
 uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy); // Returns a position after some offset. If out of bounds, returns the original position
 Relation getRelationToSelf(uint8_t self, uint8_t other); // FRIEND, ENEMY or EMPTY_RELATION
-void analyzeKingSafety(BoardState *state, uint64_t out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_check_mask); // Calculates pins, checks and unsafe squares
+void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_attacked_squares_mask); // Calculates pins, checks and unsafe squares
+void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mask, uint64_t enemy_pieces_mask); // Calculates the squares the enemy color is attacking (Including their own pieces)
 
 int main()
 {
@@ -369,7 +370,7 @@ Relation getRelationToSelf(uint8_t self, uint8_t other)
     return FRIEND;
 }
 
-void getAllValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int *count)
+void getAllPseudoValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int *count)
 {
     uint8_t self_piece = getPiece(state, pos);
     uint8_t target_pos;
@@ -495,7 +496,6 @@ void getAllValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int 
                     move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
                     (*count)++;
                 }
-                
             }
             break;
         case 6: // black pawn
@@ -572,9 +572,260 @@ void getAllValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int 
     return;
 }
 
-void analyzeKingSafety(BoardState *state, uint64_t out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_check_mask)
+void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mask, uint64_t enemy_pieces_mask)
 {
-    return;
+    uint8_t piece_pos;
+    uint8_t self_piece;
+    uint8_t target_pos;
+    uint8_t other_piece;
+    uint8_t relation;
+    while (enemy_pieces_mask != 0) // Cycles through the enemy pieces
+    {
+        piece_pos = bitscanForward(enemy_pieces_mask);
+        self_piece = getPiece(state, piece_pos);
+        switch (self_piece) // Adds the attacked squares of a piece depending on its type
+        {
+            case 0: // empty
+                break;
+            case 1: // black king
+            case 9: //white king
+                // Cycles through the 8 positions around the king
+                for (int i = 0; i<4; i++) // 4 orthogonal positions
+                {
+                    target_pos = getOffsetPosition(piece_pos, ORTHOGONAL_OFFSETS[i][0], ORTHOGONAL_OFFSETS[i][1]);
+                    if (target_pos != piece_pos)
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                    }
+                }
+                for (int i = 0; i<4; i++) // 4 diagonal positions
+                {
+                    target_pos = getOffsetPosition(piece_pos, DIAGONAL_OFFSETS[i][0], DIAGONAL_OFFSETS[i][1]);
+                    if (target_pos != piece_pos)
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                    }
+                }
+                break;
+            case 2: // black queen
+            case 10: // white queen
+            {
+                uint8_t length;
+                for (int i = 0; i<4; i++)
+                {
+                    length = 1;
+                    target_pos = getOffsetPosition(piece_pos, ORTHOGONAL_OFFSETS[i][0], ORTHOGONAL_OFFSETS[i][1]);
+                    other_piece = getPiece(state, target_pos);
+                    while (other_piece == EMPTY_PIECE)
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                        length++;
+                        target_pos = getOffsetPosition(piece_pos, ORTHOGONAL_OFFSETS[i][0] * length, ORTHOGONAL_OFFSETS[i][1] * length);
+                        other_piece = getPiece(state, target_pos);
+                    }
+                    if (piece_pos != target_pos) // Also adds the end of the ray to the attacked squares (Does out of bounds check before)
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                    }
+                }
+                for (int i = 0; i<4; i++)
+                {
+                    length = 1;
+                    target_pos = getOffsetPosition(piece_pos, DIAGONAL_OFFSETS[i][0], DIAGONAL_OFFSETS[i][1]);
+                    other_piece = getPiece(state, target_pos);
+                    while (other_piece == EMPTY_PIECE)
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                        length++;
+                        target_pos = getOffsetPosition(piece_pos, DIAGONAL_OFFSETS[i][0] * length, DIAGONAL_OFFSETS[i][1] * length);
+                        other_piece = getPiece(state, target_pos);
+                    }
+                    if (piece_pos != target_pos) // Also adds the end of the ray to the attacked squares (Does out of bounds check before)
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                    }
+                }
+                break;
+            }
+            case 3: // black rook
+            case 4: // black bishop
+            case 11: // white rook
+            case 12: // white bishop
+            {
+                int8_t const (*offsets_const)[2];
+                int8_t length;
+                if (self_piece == WHITE_ROOK || self_piece == BLACK_ROOK)
+                {
+                    offsets_const = ORTHOGONAL_OFFSETS;
+                }
+                else
+                {
+                    offsets_const = DIAGONAL_OFFSETS;
+                }
+                for (int i = 0; i<4; i++)
+                {
+                    length = 1;
+                    target_pos = getOffsetPosition(piece_pos, offsets_const[i][0], offsets_const[i][1]);
+                    other_piece = getPiece(state, target_pos);
+                    while (other_piece == EMPTY_PIECE)
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                        length++;
+                        target_pos = getOffsetPosition(piece_pos, offsets_const[i][0] * length, offsets_const[i][1] * length);
+                        other_piece = getPiece(state, target_pos);
+                    }
+                    if (piece_pos != target_pos) // Also adds the end of the ray to the attacked squares (Does out of bounds check before)
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                    }
+                }
+                break;
+            }
+            case 5: // black knight
+            case 13: // white knight
+                for (int i = 0; i<8; i++)
+                {
+                    target_pos = getOffsetPosition(piece_pos, KNIGHT_OFFSETS[i][0], KNIGHT_OFFSETS[i][1]);
+                    if (target_pos != piece_pos) // Accounts for out of bounds positions
+                    {
+                        *out_attacked_squares_mask |= (1ULL << target_pos);
+                    }
+                }
+                break;
+            case 6: // black pawn
+            case 14: // white pawn
+            {
+                uint8_t y_direction;
+                if (self_piece == WHITE_PAWN)
+                {
+                    y_direction = 1;
+                }
+                else
+                {
+                    y_direction = -1;
+                }
+                target_pos = getOffsetPosition(piece_pos, -1, y_direction);
+                if (target_pos != piece_pos) // Check enemy diagonal up left
+                {
+                    *out_attacked_squares_mask |= (1ULL << target_pos);
+                }
+                target_pos = getOffsetPosition(piece_pos, 1, y_direction);
+                if (target_pos != piece_pos) // Check enemy diagonal up left
+                {
+                    *out_attacked_squares_mask |= (1ULL << target_pos);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        return;
+        enemy_pieces_mask &= (enemy_pieces_mask-1); // Goes to the next enemy piece
+    }
+}
+
+void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_attacked_squares_mask)
+{
+    uint8_t white_to_move = (state->metadata) & WHITE_TO_MOVE_FLAG;
+    uint64_t color_mask = 0ULL;
+    uint8_t king_pos;
+    uint8_t self_piece;
+    if (white_to_move)
+    {
+        color_mask = UINT64_MAX;
+        king_pos = bitscanForward(state->board[0] && ~(state->board[1]) && ~(state->board[2]) && state->board[3]); // Gets white king position (1001)
+        self_piece = WHITE_KING;
+    }
+    else
+    {
+        king_pos = bitscanForward(~(state->board[0]) && ~(state->board[1]) && ~(state->board[2]) && state->board[3]); // Gets black king position (0001)
+        self_piece = BLACK_KING;
+    }
+    uint8_t target_pos;
+    uint8_t ray_length;
+    uint8_t other_piece;
+    uint8_t relation;
+    uint8_t possible_pin_pos;
+    
+    // Pinned pieces mask calculation and sliding pieces checks
+    for (int i = 0; i<4; i++) // Check for orthogonal pins
+    {
+        possible_pin_pos = 0;
+        ray_length = 0;
+        target_pos = getOffsetPosition(king_pos, ORTHOGONAL_OFFSETS[i][0], ORTHOGONAL_OFFSETS[i][1]);
+        other_piece = getPiece(state, target_pos);
+        relation = getRelationToSelf(self_piece, other_piece);
+        while (relation != ENEMY && target_pos != king_pos) // Goes forward until it hits an enemy or an edge
+        {
+            if (relation == FRIEND)
+            {
+                if (possible_pin_pos == 0) // If it passes a friendly piece, stores it as a potential pin
+                {
+                    possible_pin_pos = other_piece;
+                }
+                else // If it passes two friendly pieces, then there's no pin and it stops looking
+                {
+                    possible_pin_pos = 0;
+                    break;
+                }
+            }
+            ray_length++;
+            target_pos = getOffsetPosition(king_pos, ORTHOGONAL_OFFSETS[i][0]*ray_length, ORTHOGONAL_OFFSETS[i][1]*ray_length);
+            other_piece = getPiece(state, target_pos);
+            relation = getRelationToSelf(self_piece, other_piece);
+        }
+        if (target_pos != king_pos && (other_piece == BLACK_QUEEN || other_piece == WHITE_QUEEN || other_piece == BLACK_ROOK || other_piece == WHITE_ROOK))
+        {
+            if (possible_pin_pos != 0) // If there is a pinned piece orthogonally
+            {
+                *out_pinned_pieces_mask |= (1ULL << possible_pin_pos); // Adds the pin to the mask
+            }
+            else if (relation == ENEMY) // If there is a direct orthogonal attacker
+            {
+                *out_attackers_mask |= (1ULL << target_pos); // Adds the attacker to the mask
+            }
+        }
+    }
+    for (int i = 0; i<4; i++) // Check for diagonal pins
+    {
+        possible_pin_pos = 0;
+        ray_length = 0;
+        target_pos = getOffsetPosition(king_pos, DIAGONAL_OFFSETS[i][0], DIAGONAL_OFFSETS[i][1]);
+        other_piece = getPiece(state, target_pos);
+        relation = getRelationToSelf(self_piece, other_piece);
+        while (relation != ENEMY && target_pos != king_pos) // Goes forward until it hits an enemy or an edge
+        {
+            if (relation == FRIEND)
+            {
+                if (possible_pin_pos == 0) // If it passes a friendly piece, stores it as a potential pin
+                {
+                    possible_pin_pos = other_piece;
+                }
+                else // If it passes two friendly pieces, then there's no pin and it stops looking
+                {
+                    possible_pin_pos = 0;
+                    break;
+                }
+            }
+            ray_length++;
+            target_pos = getOffsetPosition(king_pos, DIAGONAL_OFFSETS[i][0]*ray_length, DIAGONAL_OFFSETS[i][1]*ray_length);
+            other_piece = getPiece(state, target_pos);
+            relation = getRelationToSelf(self_piece, other_piece);
+        }
+        if (target_pos != king_pos && (other_piece == BLACK_QUEEN || other_piece == WHITE_QUEEN || other_piece == BLACK_BISHOP || other_piece == WHITE_BISHOP))
+        {
+            if (possible_pin_pos != 0) // If there is a pinned piece diagonally
+            {
+                *out_pinned_pieces_mask |= (1ULL << possible_pin_pos); // Adds the pin to the mask
+            }
+            else if (relation == ENEMY) // If there is a direct diagonal attacker
+            {
+                *out_attackers_mask |= (1ULL << target_pos); // Adds the attacker to the mask
+            }
+        }
+    }
+
+    // Get all attackers (except for the rooks, bishops and queens). So pawns and knights
 }
 
 Move *getAllValidBoardMoves(BoardState *state, int *move_count)
@@ -592,7 +843,7 @@ Move *getAllValidBoardMoves(BoardState *state, int *move_count)
     while (friendly_pieces != 0)
     {
         uint8_t piece_pos = bitscanForward(friendly_pieces);
-        getAllValidPieceMoves(state, piece_pos, all_valid_moves, move_count);
+        getAllPseudoValidPieceMoves(state, piece_pos, all_valid_moves, move_count);
         friendly_pieces &= (friendly_pieces-1);
     }
 
