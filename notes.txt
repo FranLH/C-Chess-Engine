@@ -1,0 +1,15 @@
+------- TO D0 -------
+    - Castling movement rules
+        - Set castling right bits to 0 after castling
+    - Make king moves set the corresponding castling right bits to 0
+    - Knight movement rules --- DONE
+    - Rook movement rules --- DONE
+        - Make rook moves set the corresponding castling right bit to 0
+    - Bishop movement rules --- DONE
+    - Queen movement rules --- DONE
+    - Create function to check if the king is safe in a given state
+        - Call this function before storing a move as valid
+
+        
+    - Store chess.c as a chess.h, and have it only work as a portable chess engine. Then, create a main.c and main.exe to handle
+      the interface and input/output
