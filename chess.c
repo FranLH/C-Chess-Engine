@@ -207,7 +207,7 @@ Move* getAllValidBoardMoves(BoardState *state, int *move_count); // Generates al
 void getAllValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int *count); // Modifies an array of moves in place with the valid moves of a piece. Updates the move count too
 uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy); // Returns a position after some offset. If out of bounds, returns the original position
 Relation getRelationToSelf(uint8_t self, uint8_t other); // FRIEND, ENEMY or EMPTY_RELATION
-
+void analyzeKingSafety(BoardState *state, uint64_t out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_check_mask); // Calculates pins, checks and unsafe squares
 
 int main()
 {
@@ -569,6 +569,11 @@ void getAllValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int 
         default:
             break;
     }
+    return;
+}
+
+void analyzeKingSafety(BoardState *state, uint64_t out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_check_mask)
+{
     return;
 }
 
