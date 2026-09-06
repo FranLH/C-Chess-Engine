@@ -214,22 +214,32 @@ int main()
 {
     BoardState bstate = START_BOARD; // Default board
     // bstate.metadata &= ~WHITE_TO_MOVE_FLAG;
-    //setPiece(&bstate, H4, WHITE_ROOK);
-    setPiece(&bstate, D5, WHITE_QUEEN);
+    setPiece(&bstate, D7, EMPTY_PIECE);
+    setPiece(&bstate, D1, WHITE_KING);
+    setPiece(&bstate, E1, EMPTY_PIECE);
+    setPiece(&bstate, A4, BLACK_BISHOP);
+    setPiece(&bstate, C2, EMPTY_PIECE);
+    setPiece(&bstate, D2, EMPTY_PIECE);
+    setPiece(&bstate, E3, BLACK_KNIGHT);
     //bstate.enPassantPos = 32;
     printBoard(&bstate);
 
 
 
-    int moves_count = 0;
-    Move *moves = getAllValidBoardMoves(&bstate, &moves_count);
-    printMoves(&bstate, moves, moves_count);
+    // int moves_count = 0;
+    // Move *moves = getAllValidBoardMoves(&bstate, &moves_count);
+    // printMoves(&bstate, moves, moves_count);
 
-    makeMove(&bstate, &(moves[0]));
-    printBoard(&bstate);
-    moves_count = 0;
-    moves = getAllValidBoardMoves(&bstate, &moves_count);
-    printMoves(&bstate, moves, moves_count);
+    // makeMove(&bstate, &(moves[0]));
+    // printBoard(&bstate);
+    // moves_count = 0;
+    // moves = getAllValidBoardMoves(&bstate, &moves_count);
+    // printMoves(&bstate, moves, moves_count);
+    uint64_t pinned_pieces = 0ULL;
+    uint64_t attackers = 0ULL;
+    uint64_t attacked_squares = 0ULL;
+    analyzeKingSafety(&bstate, &pinned_pieces, &attackers, &attacked_squares);
+
     return 0;
 }
 
@@ -583,6 +593,7 @@ void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mas
     {
         piece_pos = bitscanForward(enemy_pieces_mask);
         self_piece = getPiece(state, piece_pos);
+        
         switch (self_piece) // Adds the attacked squares of a piece depending on its type
         {
             case 0: // empty
@@ -719,39 +730,57 @@ void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mas
             default:
                 break;
         }
-        return;
-        enemy_pieces_mask &= (enemy_pieces_mask-1); // Goes to the next enemy piece
+        
+        enemy_pieces_mask &= ~(1ULL << piece_pos); // Goes to the next enemy piece
     }
+    return;
 }
 
 void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_attacked_squares_mask)
 {
+    // WHITE_TO_MOVE defines which king the analysis will be made for
     uint8_t white_to_move = (state->metadata) & WHITE_TO_MOVE_FLAG;
-    uint64_t color_mask = 0ULL;
+    uint64_t enemy_color_mask;
     uint8_t king_pos;
     uint8_t self_piece;
+
+    uint8_t enemy_pawn; 
+    uint8_t enemy_knight;
+    uint8_t enemy_queen;
+    uint8_t enemy_rook;
+    uint8_t enemy_bishop;
     if (white_to_move)
     {
-        color_mask = UINT64_MAX;
-        king_pos = bitscanForward(state->board[0] && ~(state->board[1]) && ~(state->board[2]) && state->board[3]); // Gets white king position (1001)
+        enemy_color_mask = 0ULL;
+        king_pos = bitscanForward(state->board[0] & ~(state->board[1]) & ~(state->board[2]) & state->board[3]); // Gets white king position (1001)
         self_piece = WHITE_KING;
+        enemy_pawn = BLACK_PAWN;
+        enemy_knight = BLACK_KNIGHT;
+        enemy_queen = BLACK_QUEEN;
+        enemy_rook = BLACK_ROOK;
+        enemy_bishop = BLACK_BISHOP;
     }
     else
     {
-        king_pos = bitscanForward(~(state->board[0]) && ~(state->board[1]) && ~(state->board[2]) && state->board[3]); // Gets black king position (0001)
+        enemy_color_mask = UINT64_MAX;
+        king_pos = bitscanForward(~(state->board[0]) & ~(state->board[1]) & ~(state->board[2]) & state->board[3]); // Gets black king position (0001)
         self_piece = BLACK_KING;
+        enemy_pawn = WHITE_PAWN;
+        enemy_knight = WHITE_KNIGHT;
+        enemy_queen = WHITE_QUEEN;
+        enemy_rook = WHITE_ROOK;
+        enemy_bishop = WHITE_BISHOP;
     }
     uint8_t target_pos;
     uint8_t ray_length;
     uint8_t other_piece;
     uint8_t relation;
     uint8_t possible_pin_pos;
-    
     // Pinned pieces mask calculation and sliding pieces checks
     for (int i = 0; i<4; i++) // Check for orthogonal pins
     {
         possible_pin_pos = 0;
-        ray_length = 0;
+        ray_length = 1;
         target_pos = getOffsetPosition(king_pos, ORTHOGONAL_OFFSETS[i][0], ORTHOGONAL_OFFSETS[i][1]);
         other_piece = getPiece(state, target_pos);
         relation = getRelationToSelf(self_piece, other_piece);
@@ -761,7 +790,7 @@ void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint
             {
                 if (possible_pin_pos == 0) // If it passes a friendly piece, stores it as a potential pin
                 {
-                    possible_pin_pos = other_piece;
+                    possible_pin_pos = target_pos;
                 }
                 else // If it passes two friendly pieces, then there's no pin and it stops looking
                 {
@@ -774,22 +803,23 @@ void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint
             other_piece = getPiece(state, target_pos);
             relation = getRelationToSelf(self_piece, other_piece);
         }
-        if (target_pos != king_pos && (other_piece == BLACK_QUEEN || other_piece == WHITE_QUEEN || other_piece == BLACK_ROOK || other_piece == WHITE_ROOK))
+        if (other_piece == enemy_queen || other_piece == enemy_rook) // Checks for enemy rooks/queens
         {
-            if (possible_pin_pos != 0) // If there is a pinned piece orthogonally
-            {
-                *out_pinned_pieces_mask |= (1ULL << possible_pin_pos); // Adds the pin to the mask
-            }
-            else if (relation == ENEMY) // If there is a direct orthogonal attacker
+            printf("Possible pin at %s\n", COORDINATES[possible_pin_pos]);
+            if (possible_pin_pos == 0)
             {
                 *out_attackers_mask |= (1ULL << target_pos); // Adds the attacker to the mask
+            }
+            else
+            {
+                *out_pinned_pieces_mask |= (1ULL << possible_pin_pos); // Adds the pin to the mask
             }
         }
     }
     for (int i = 0; i<4; i++) // Check for diagonal pins
     {
         possible_pin_pos = 0;
-        ray_length = 0;
+        ray_length = 1;
         target_pos = getOffsetPosition(king_pos, DIAGONAL_OFFSETS[i][0], DIAGONAL_OFFSETS[i][1]);
         other_piece = getPiece(state, target_pos);
         relation = getRelationToSelf(self_piece, other_piece);
@@ -799,7 +829,7 @@ void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint
             {
                 if (possible_pin_pos == 0) // If it passes a friendly piece, stores it as a potential pin
                 {
-                    possible_pin_pos = other_piece;
+                    possible_pin_pos = target_pos;
                 }
                 else // If it passes two friendly pieces, then there's no pin and it stops looking
                 {
@@ -812,34 +842,70 @@ void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint
             other_piece = getPiece(state, target_pos);
             relation = getRelationToSelf(self_piece, other_piece);
         }
-        if (target_pos != king_pos && (other_piece == BLACK_QUEEN || other_piece == WHITE_QUEEN || other_piece == BLACK_BISHOP || other_piece == WHITE_BISHOP))
+        if (other_piece == enemy_queen || other_piece == enemy_bishop) // Checks for enemy bishops/queens
         {
-            if (possible_pin_pos != 0) // If there is a pinned piece diagonally
+            if (possible_pin_pos == 0)
+            {
+                *out_attackers_mask |= (1ULL << target_pos); // Adds the attacker to the mask
+                
+            }
+            else
             {
                 *out_pinned_pieces_mask |= (1ULL << possible_pin_pos); // Adds the pin to the mask
             }
-            else if (relation == ENEMY) // If there is a direct diagonal attacker
-            {
-                *out_attackers_mask |= (1ULL << target_pos); // Adds the attacker to the mask
-            }
         }
     }
+    // Get all attackers except for the rooks, bishops and queens. So pawns and knights
+    
+    for (int i = 0; i<8; i++) // Gets enemy knight attackers
+    {
+        target_pos = getOffsetPosition(king_pos, KNIGHT_OFFSETS[i][0], KNIGHT_OFFSETS[i][1]);
+        if (getPiece(state, target_pos) == enemy_knight)
+        {
+            *out_attackers_mask |= (1ULL << target_pos);
+            
+        }
+    }
+    int8_t y_direction;
+    if (self_piece == WHITE_KING)
+    {
+        y_direction = 1;
+    }
+    else
+    {
+        y_direction = -1;
+    }
+    target_pos = getOffsetPosition(king_pos, -1, y_direction);
+    other_piece = getPiece(state, target_pos);
+    if (other_piece == enemy_pawn) // Check for enemy pawn diagonal up left
+    {
+        *out_attackers_mask |= (1ULL << target_pos);
+        
+    }
+    target_pos = getOffsetPosition(king_pos, 1, y_direction);
+    if (other_piece == enemy_pawn) // Check for enemy pawn diagonal up left
+    {
+        *out_attackers_mask |= (1ULL << target_pos);
+        
+    }
 
-    // Get all attackers (except for the rooks, bishops and queens). So pawns and knights
+    uint64_t occupied = state->board[0] | state->board[1] | state->board[2] | state->board[3]; // Gets all positions with pieces
+    uint64_t enemy_pieces = occupied & ~(state->board[0]^(enemy_color_mask)); // Gets all friendly pieces positions
+    getAllAttackedSquares(state, out_attacked_squares_mask, enemy_pieces);
 }
 
 Move *getAllValidBoardMoves(BoardState *state, int *move_count)
 {
     Move *all_valid_moves = (Move*)malloc(MAX_MOVES * sizeof(Move));
     uint8_t white_to_move = (state->metadata) & WHITE_TO_MOVE_FLAG;
-    uint64_t color_mask = 0ULL;
+    uint64_t friendly_color_mask = 0ULL;
     if (white_to_move)
     {
-        color_mask = UINT64_MAX;
+        friendly_color_mask = UINT64_MAX;
     }
 
     uint64_t occupied = state->board[0] | state->board[1] | state->board[2] | state->board[3]; // Gets all positions with pieces
-    uint64_t friendly_pieces = occupied & ~(state->board[0]^(color_mask)); // Gets all friendly pieces positions
+    uint64_t friendly_pieces = occupied & ~(state->board[0]^(friendly_color_mask)); // Gets all friendly pieces positions
     while (friendly_pieces != 0)
     {
         uint8_t piece_pos = bitscanForward(friendly_pieces);
