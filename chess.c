@@ -168,6 +168,28 @@ static const char* const MOVE_TYPE_NAMES[AMOUNT_OF_MOVE_TYPES] =
 
 };
 
+// canCastle function consts
+// [color][side]
+// Squares that must be empty
+static const uint64_t CASTLE_PATH_MASK[2][2] = {
+    { 0x6000000000000000ULL, 0x0E00000000000000ULL }, // Black: F8|G8,          B8|C8|D8
+    { 0x60ULL,             0xEULL }            // White: F1|G1,          B1|C1|D1
+    
+};
+
+// Squares that must NOT be under attack (King path: Current, Passing, Landing)
+static const uint64_t CASTLE_SAFETY_MASK[2][2] = {
+    { 0x7000000000000000ULL, 0x1C00000000000000ULL }, // Black: E8|F8|G8,       E8|D8|C8
+    { 0x70ULL,             0x1CULL }            // White: E1|F1|G1,       E1|D1|C1
+
+};
+
+// Castling rights flags mapping 
+static const uint8_t CASTLE_RIGHTS_FLAG[2][2] = {
+    { BLACK_CAN_CASTLE_K_FLAG, BLACK_CAN_CASTLE_Q_FLAG },
+    { WHITE_CAN_CASTLE_K_FLAG, WHITE_CAN_CASTLE_Q_FLAG }
+};
+
 static const BoardState EMPTY_BOARD =
 {
     {
@@ -199,15 +221,14 @@ static const BoardState START_BOARD =
 // ------------------------------------------- DECLARATIONS ----------------------------------------
 
 static inline int bitscanForward(uint64_t bitboard);
-uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy); // Returns a position after some offset. If out of bounds, returns the original position
-uint8_t getPiece(BoardState *state, uint8_t pos);
-Relation getRelationToSelf(uint8_t self, uint8_t other); // FRIEND, ENEMY or EMPTY_RELATION
+static inline uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy); // Returns a position after some offset. If out of bounds, returns the original position
+static inline uint8_t getPiece(BoardState *state, uint8_t pos);
+static inline bool canCastle(BoardState *state, uint64_t *safe_squares, uint8_t color, uint8_t side);
+static inline Relation getRelationToSelf(uint8_t self, uint8_t other); // FRIEND, ENEMY or EMPTY_RELATION
 void setPiece(BoardState *state, uint8_t pos, uint8_t piece); // Pos: [0-63], piece: {0:empty, [1-6]:white [9-14]:black}
 void makeMove(BoardState *state, Move *move);
 void printBoard(BoardState *state);
 void printMoves(BoardState *state, Move *moves, int move_count);
-Move* getAllValidBoardMovesOld(BoardState *state, int *move_count); // Generates all valid moves, updates a move counter variable in place and returns a pointer to the new Move array.
-void getAllPseudoValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int *count); // Modifies an array of moves in place with the valid moves of a piece. Updates the move count too
 void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mask, uint64_t enemy_pieces_mask); // Calculates the squares the enemy color is attacking (Including their own pieces)
 void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_attacked_squares_mask, uint8_t *out_king_pos, uint8_t *out_pin_attackers); // Calculates pins, checks and unsafe squares
 Move* getValidMoves(BoardState *state, int *move_count); // Generates all valid moves in the given board state, updates a move counter variable, returns pointer to a Move array
@@ -255,7 +276,7 @@ static inline int bitscanForward(uint64_t bitboard) // Counts trailing zeroes
     return __builtin_ctzll(bitboard);
 }
 
-uint8_t getPiece(BoardState *state, uint8_t pos)
+static inline uint8_t getPiece(BoardState *state, uint8_t pos)
 {
     uint64_t *board = state->board;
     uint8_t piece = 0;
@@ -276,7 +297,6 @@ void setPiece(BoardState *state, uint8_t pos, uint8_t piece)
         state->board[3-i] &= (~(1ULL << pos)); // sets the bit to 0
         state->board[3-i] |= ( bit << pos ); // ORs the bit with the new bit
     }
-    
 }
 
 void makeMove(BoardState *state, Move *move)
@@ -289,11 +309,30 @@ void makeMove(BoardState *state, Move *move)
     }
     MoveType move_type = (move->special);
     state->enPassantPos = 0; // Defaults en passant position to 0
+    uint8_t white_to_move = state->metadata & WHITE_TO_MOVE_FLAG;
     switch (move_type)
     {
     case MOVE_NORMAL: // Normal move
         setPiece(state, move->to, getPiece(state, move->from));
         setPiece(state, move->from, EMPTY_PIECE);
+        // Flip white castling bits if necessary
+        if ((state->metadata & WHITE_CAN_CASTLE_K_FLAG) && (move->from == H1 || move->to == H1 || move->from == E1)) // If the king/rook moves or the rook is taken
+        {
+            state->metadata &= ~WHITE_CAN_CASTLE_K_FLAG;
+        }
+        if ((state->metadata & WHITE_CAN_CASTLE_Q_FLAG) && (move->from == A1 || move->to == A1 || move->from == E1)) // If the king/rook moves or the rook is taken
+        {
+            state->metadata &= ~WHITE_CAN_CASTLE_Q_FLAG;
+        }
+        // Flip black castling bits if necessary
+        if ((state->metadata & BLACK_CAN_CASTLE_K_FLAG) && (move->from == H8 || move->to == H8 || move->from == E8)) // If the king/rook moves or the rook is taken
+        {
+            state->metadata &= ~BLACK_CAN_CASTLE_K_FLAG;
+        }
+        if ((state->metadata & BLACK_CAN_CASTLE_Q_FLAG) && (move->from == A8 || move->to == A8 || move->from == E8)) // If the king/rook moves or the rook is taken
+        {
+            state->metadata &= ~BLACK_CAN_CASTLE_Q_FLAG;
+        }
         break;
     case MOVE_EN_PASSANT: // En passant
         setPiece(state, move->to, getPiece(state, move->from));
@@ -307,8 +346,40 @@ void makeMove(BoardState *state, Move *move)
         state->enPassantPos = ((move->to)+(move->from))>>1; // Gets the square in between by adding the positions and dividing by 2
         break;
     case MOVE_CASTLE_K:
+        if (white_to_move)
+        {
+            setPiece(state, E1, EMPTY_PIECE);
+            setPiece(state, F1, WHITE_ROOK);
+            setPiece(state, G1, WHITE_KING);
+            setPiece(state, H1, EMPTY_PIECE);
+            state->metadata &= ~WHITE_CAN_CASTLE_K_FLAG; // Prevent castling again
+            state->metadata &= ~WHITE_CAN_CASTLE_Q_FLAG; // Prevent castling again
+            break;
+        }
+        setPiece(state, E8, EMPTY_PIECE);
+        setPiece(state, F8, BLACK_ROOK);
+        setPiece(state, G8, BLACK_KING);
+        setPiece(state, H8, EMPTY_PIECE);
+        state->metadata &= ~BLACK_CAN_CASTLE_K_FLAG; // Prevent castling again
+        state->metadata &= ~BLACK_CAN_CASTLE_Q_FLAG; // Prevent castling again
         break;
     case MOVE_CASTLE_Q:
+        if (white_to_move)
+        {
+            setPiece(state, A1, EMPTY_PIECE);
+            setPiece(state, C1, WHITE_KING);
+            setPiece(state, D1, WHITE_ROOK);
+            setPiece(state, E1, EMPTY_PIECE);
+            state->metadata &= ~WHITE_CAN_CASTLE_K_FLAG; // Prevent castling again
+            state->metadata &= ~WHITE_CAN_CASTLE_Q_FLAG; // Prevent castling again
+            break;
+        }
+        setPiece(state, A8, EMPTY_PIECE);
+        setPiece(state, C8, WHITE_KING);
+        setPiece(state, D8, WHITE_ROOK);
+        setPiece(state, E8, EMPTY_PIECE);
+        state->metadata &= ~BLACK_CAN_CASTLE_K_FLAG; // Prevent castling again
+        state->metadata &= ~BLACK_CAN_CASTLE_Q_FLAG; // Prevent castling again
         break;
     case MOVE_PROMOTION_Q:
         break;
@@ -361,7 +432,7 @@ void printMoves(BoardState *state, Move *moves, int move_count)
     }
 }
 
-uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy)
+static inline uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy)
 {
     int8_t x = (pos & 7) + dx; // Equivalent to doing mod 8
     int8_t y = (pos >> 3) + dy; // Equivalent to whole division by 8
@@ -372,219 +443,17 @@ uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy)
     return (y<<3) + x; // Returns the position after the offset
 }
 
-Relation getRelationToSelf(uint8_t self, uint8_t other)
+static inline Relation getRelationToSelf(uint8_t self, uint8_t other)
 {
     if (other == 0)
     {
         return EMPTY_RELATION; 
     }
-    if ((self >> 3) != (other >> 3))
+    if ((self ^ other) & 8)
     {
         return ENEMY;
     }
     return FRIEND;
-}
-
-void getAllPseudoValidPieceMoves(BoardState *state, uint8_t pos, Move *move_list, int *count)
-{
-    uint8_t self_piece = getPiece(state, pos);
-    uint8_t target_pos;
-    uint8_t other_piece;
-    uint8_t relation;
-    switch (self_piece)
-    {
-        case 0: // empty
-            break;
-        case 1: // black king
-        case 9: //white king
-            // Cycles through the 8 positions around the king
-            for (int i = 0; i<4; i++) // 4 orthogonal positions
-            {
-                target_pos = getOffsetPosition(pos, ORTHOGONAL_OFFSETS[i][0], ORTHOGONAL_OFFSETS[i][1]);
-                relation = getRelationToSelf(self_piece, getPiece(state, target_pos));
-                if (relation != FRIEND)
-                {
-                    // CHECK IF MOVE IS CHECK-SAFE
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                }
-            }
-            for (int i = 0; i<4; i++) // 4 diagonal positions
-            {
-                target_pos = getOffsetPosition(pos, DIAGONAL_OFFSETS[i][0], DIAGONAL_OFFSETS[i][1]);
-                relation = getRelationToSelf(self_piece, getPiece(state, target_pos));
-                if (relation != FRIEND)
-                {
-                    // CHECK IF MOVE IS CHECK-SAFE
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                }
-            }
-            break;
-        case 2: // black queen
-        case 10: // white queen
-        {
-            uint8_t length;
-            for (int i = 0; i<4; i++)
-            {
-                length = 1;
-                target_pos = getOffsetPosition(pos, ORTHOGONAL_OFFSETS[i][0], ORTHOGONAL_OFFSETS[i][1]);
-                other_piece = getPiece(state, target_pos);
-                while (other_piece == EMPTY_PIECE)
-                {
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                    length++;
-                    target_pos = getOffsetPosition(pos, ORTHOGONAL_OFFSETS[i][0] * length, ORTHOGONAL_OFFSETS[i][1] * length);
-                    other_piece = getPiece(state, target_pos);
-                }
-                if (getRelationToSelf(self_piece, other_piece) == ENEMY)
-                {
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                }
-            }
-            for (int i = 0; i<4; i++)
-            {
-                length = 1;
-                target_pos = getOffsetPosition(pos, DIAGONAL_OFFSETS[i][0], DIAGONAL_OFFSETS[i][1]);
-                other_piece = getPiece(state, target_pos);
-                while (other_piece == EMPTY_PIECE)
-                {
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                    length++;
-                    target_pos = getOffsetPosition(pos, DIAGONAL_OFFSETS[i][0] * length, DIAGONAL_OFFSETS[i][1] * length);
-                    other_piece = getPiece(state, target_pos);
-                }
-                if (getRelationToSelf(self_piece, other_piece) == ENEMY)
-                {
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                }
-            }
-            break;
-        }
-        case 3: // black rook
-        case 4: // black bishop
-        case 11: // white rook
-        case 12: // white bishop
-        {
-            int8_t const (*offsets_const)[2];
-            if (self_piece == WHITE_ROOK || self_piece == BLACK_ROOK)
-            {
-                offsets_const = ORTHOGONAL_OFFSETS;
-            }
-            else
-            {
-                offsets_const = DIAGONAL_OFFSETS;
-            }
-            for (int i = 0; i<4; i++)
-            {
-                uint8_t length = 1;
-                target_pos = getOffsetPosition(pos, offsets_const[i][0], offsets_const[i][1]);
-                other_piece = getPiece(state, target_pos);
-                while (other_piece == EMPTY_PIECE)
-                {
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                    length++;
-                    target_pos = getOffsetPosition(pos, offsets_const[i][0] * length, offsets_const[i][1] * length);
-                    other_piece = getPiece(state, target_pos);
-                }
-                if (getRelationToSelf(self_piece, other_piece) == ENEMY)
-                {
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                }
-            }
-            break;
-        }
-        case 5: // black knight
-        case 13: // white knight
-            for (int i = 0; i<8; i++)
-            {
-                target_pos = getOffsetPosition(pos, KNIGHT_OFFSETS[i][0], KNIGHT_OFFSETS[i][1]);
-                relation = getRelationToSelf(self_piece, getPiece(state, target_pos));
-                if (relation != FRIEND)
-                {
-                    move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                    (*count)++;
-                }
-            }
-            break;
-        case 6: // black pawn
-        case 14: // white pawn
-        {
-            uint8_t y_direction;
-            uint8_t start_rank;
-            bool is_on_start_rank = false;
-            // White and black pawns only differ in direction and double push positions
-            if (self_piece == WHITE_PAWN)
-            {
-                y_direction = 1;
-                start_rank = 1;
-            }
-            else
-            {
-                y_direction = -1;
-                start_rank = 6;
-            }
-            if (pos>>3 == start_rank)
-            {
-                is_on_start_rank = true; // Checks if the pawn is on the starting rank, to prevent en passant on friendly pieces and double push on non-starting ranks
-            }
-            
-            target_pos = getOffsetPosition(pos, -1, y_direction);
-            relation = getRelationToSelf(self_piece, getPiece(state, target_pos));
-            if (relation == ENEMY) // Check enemy diagonal up left
-            {
-                move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                (*count)++;
-            }
-            else if (!is_on_start_rank && (relation == EMPTY_RELATION) && ((state->enPassantPos) == target_pos)) // Check for en passant diagonal left
-            {
-                move_list[*count] = (Move){pos, target_pos, MOVE_EN_PASSANT};
-                (*count)++;
-            }
-            
-            target_pos = getOffsetPosition(pos, 1, y_direction);
-            relation = getRelationToSelf(self_piece, getPiece(state, target_pos));
-            if (relation == ENEMY) // Check enemy diagonal right
-            {
-                move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                (*count)++;
-            }
-            else if (!is_on_start_rank && (relation == EMPTY_RELATION) && ((state->enPassantPos) == target_pos)) // Check for en passant diagonal right
-            {
-                move_list[*count] = (Move){pos, target_pos, MOVE_EN_PASSANT};
-                (*count)++;
-            }
-
-            target_pos = getOffsetPosition(pos, 0, y_direction);
-            if (getRelationToSelf(self_piece, getPiece(state, target_pos)) == EMPTY_RELATION) // Check forward 1
-            {
-                move_list[*count] = (Move){pos, target_pos, MOVE_NORMAL};
-                (*count)++;
-            }
-            else {break;} // Breaks if the up 1 square is occupied
-
-            if (!is_on_start_rank) // Breaks if the pawn is not on the starting rank
-            {
-                break;
-            }
-            target_pos = getOffsetPosition(pos, 0, y_direction*2);
-            if (getRelationToSelf(self_piece, getPiece(state, target_pos)) == EMPTY_RELATION) // Check forward 2
-            {
-                move_list[*count] = (Move){pos, target_pos, MOVE_DOUBLE_PUSH};
-                (*count)++;
-            }
-            break;
-        }
-        default:
-            break;
-    }
-    return;
 }
 
 void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mask, uint64_t enemy_pieces_mask)
@@ -739,6 +608,23 @@ void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mas
         enemy_pieces_mask &= ~(1ULL << piece_pos); // Goes to the next enemy piece
     }
     return;
+}
+
+static inline bool canCastle(BoardState *state, uint64_t *safe_squares, uint8_t color, uint8_t side)
+{
+    if (!(state->metadata & CASTLE_RIGHTS_FLAG[color][side]))
+    {
+        return false;
+    }
+    if (!(*safe_squares & CASTLE_SAFETY_MASK[color][side]))
+    {
+        return false;
+    }
+    if (CASTLE_PATH_MASK[color][side] & (state->board[0] | state->board[1] | state->board[2] | state->board[3]))
+    {
+        return false;
+    }
+    return true;
 }
 
 void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_attacked_squares_mask, uint8_t *out_king_pos, uint8_t *out_pin_attackers)
@@ -931,6 +817,18 @@ void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *m
                     move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_NORMAL};
                     (*move_count)++;
                 }
+            }
+            // Kingside castling
+            if (canCastle(state, valid_squares_mask, state->metadata & WHITE_TO_MOVE_FLAG, 0))
+            {
+                move_list[*move_count] = (Move){piece_pos, piece_pos+2, MOVE_CASTLE_K};
+                (*move_count)++;
+            }
+            // Queenside castling
+            if (canCastle(state, valid_squares_mask, state->metadata & WHITE_TO_MOVE_FLAG, 1))
+            {
+                move_list[*move_count] = (Move){piece_pos, piece_pos-2, MOVE_CASTLE_Q};
+                (*move_count)++;
             }
             break;
         case 2: // black queen
@@ -1181,26 +1079,6 @@ Move *getValidMoves(BoardState *state, int *move_count)
             getPieceMoves(state, piece_pos, all_valid_moves, move_count, &piece_valid_squares_mask);
         }
         friendly_pieces &= (friendly_pieces-1); // Next piece
-    }
-    return all_valid_moves;
-}
-
-Move *getAllValidBoardMovesOld(BoardState *state, int *move_count)
-{
-    Move *all_valid_moves = (Move*)malloc(MAX_MOVES * sizeof(Move));
-    uint8_t white_to_move = (state->metadata) & WHITE_TO_MOVE_FLAG;
-    uint64_t friendly_color_mask = 0ULL;
-    if (white_to_move)
-    {
-        friendly_color_mask = UINT64_MAX;
-    }
-    uint64_t occupied = state->board[0] | state->board[1] | state->board[2] | state->board[3]; // Gets all positions with pieces
-    uint64_t friendly_pieces = occupied & ~(state->board[0]^(friendly_color_mask)); // Gets all friendly pieces positions
-    while (friendly_pieces != 0)
-    {
-        uint8_t piece_pos = bitscanForward(friendly_pieces);
-        getAllPseudoValidPieceMoves(state, piece_pos, all_valid_moves, move_count);
-        friendly_pieces &= (friendly_pieces-1);
     }
     return all_valid_moves;
 }
