@@ -2,6 +2,8 @@
     - Implement game loop
       - Flip turn bit (DONE)
       - Win detection
+
+    - Add export to FEN and import from FEN
     
 
     - IMPORTANT: make sure that the valid moves generator takes into account the fact that taking via en passant
