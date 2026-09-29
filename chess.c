@@ -176,14 +176,12 @@ static const uint64_t CASTLE_PATH_MASK[2][2] = {
     { 0x60ULL,             0xEULL }            // White: F1|G1,          B1|C1|D1
     
 };
-
 // Squares that must NOT be under attack (King path: Current, Passing, Landing)
 static const uint64_t CASTLE_SAFETY_MASK[2][2] = {
     { 0x7000000000000000ULL, 0x1C00000000000000ULL }, // Black: E8|F8|G8,       E8|D8|C8
     { 0x70ULL,             0x1CULL }            // White: E1|F1|G1,       E1|D1|C1
 
 };
-
 // Castling rights flags mapping 
 static const uint8_t CASTLE_RIGHTS_FLAG[2][2] = {
     { BLACK_CAN_CASTLE_K_FLAG, BLACK_CAN_CASTLE_Q_FLAG },
@@ -236,35 +234,15 @@ void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *m
 
 int main()
 {
-
-    printf("%llu", squares_between[0][7]);
     BoardState bstate = START_BOARD; // Default board
-    // bstate.metadata &= ~WHITE_TO_MOVE_FLAG;
-    setPiece(&bstate, D7, EMPTY_PIECE);
-    setPiece(&bstate, D1, WHITE_KING);
-    setPiece(&bstate, E1, EMPTY_PIECE);
-    //setPiece(&bstate, C2, BLACK_BISHOP);
-    //setPiece(&bstate, C2, EMPTY_PIECE);
-    setPiece(&bstate, D2, EMPTY_PIECE);
-    //setPiece(&bstate, E3, BLACK_KNIGHT);
-    //bstate.enPassantPos = 32;
     printBoard(&bstate);
+    //bstate.metadata &= ~WHITE_TO_MOVE_FLAG;
 
-
-
-    int moves_count = 0;
-    Move *moves = getValidMoves(&bstate, &moves_count);
-    printMoves(&bstate, moves, moves_count);
-
-    // makeMove(&bstate, &(moves[0]));
-    // printBoard(&bstate);
-    // moves_count = 0;
-    // moves = getAllValidBoardMovesOld(&bstate, &moves_count);
+    // int moves_count = 0;
+    // Move *moves = getValidMoves(&bstate, &moves_count);
     // printMoves(&bstate, moves, moves_count);
-    uint64_t pinned_pieces = 0ULL;
-    uint64_t attackers = 0ULL;
-    uint64_t attacked_squares = 0ULL;
-    // analyzeKingSafety(&bstate, &pinned_pieces, &attackers, &attacked_squares, kin);
+    // makeMove(&bstate, &moves[0]);
+    // printBoard(&bstate);
 
     return 0;
 }
@@ -392,6 +370,7 @@ void makeMove(BoardState *state, Move *move)
     default:
         break;
     }
+    state->metadata ^= WHITE_TO_MOVE_FLAG; // Flip the turn
 }
 
 void printBoard(BoardState *state)
@@ -405,6 +384,23 @@ void printBoard(BoardState *state)
     {
         printf("Black to move\n");
     }
+    if (state->metadata & WHITE_CAN_CASTLE_K_FLAG)
+    {
+        printf("White can castle kingside\n");
+    }
+    if (state->metadata & WHITE_CAN_CASTLE_Q_FLAG)
+    {
+        printf("White can castle queenside\n");
+    }
+    if (state->metadata & BLACK_CAN_CASTLE_K_FLAG)
+    {
+        printf("Black can castle kingside\n");
+    }
+    if (state->metadata & BLACK_CAN_CASTLE_Q_FLAG)
+    {
+        printf("Black can castle queenside\n");
+    }
+    printf("En passant at %s\n", COORDINATES[state->enPassantPos]);
     printf(" ________________\n");
     for (int i = 7; i>=0; i--)
     {   
@@ -612,15 +608,15 @@ void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mas
 
 static inline bool canCastle(BoardState *state, uint64_t *safe_squares, uint8_t color, uint8_t side)
 {
-    if (!(state->metadata & CASTLE_RIGHTS_FLAG[color][side]))
+    if (!(state->metadata & CASTLE_RIGHTS_FLAG[color][side])) // Checks if castling is allowed
     {
         return false;
     }
-    if (!(*safe_squares & CASTLE_SAFETY_MASK[color][side]))
+    if (!(*safe_squares & CASTLE_SAFETY_MASK[color][side])) // Ensures the king won't be left in check
     {
         return false;
     }
-    if (CASTLE_PATH_MASK[color][side] & (state->board[0] | state->board[1] | state->board[2] | state->board[3]))
+    if (CASTLE_PATH_MASK[color][side] & (state->board[0] | state->board[1] | state->board[2] | state->board[3])) // Checks if the path is free
     {
         return false;
     }
@@ -956,10 +952,24 @@ void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *m
             
             target_pos = getOffsetPosition(piece_pos, -1, y_direction);
             relation = getRelationToSelf(self_piece, getPiece(state, target_pos));
-            if (relation == ENEMY && ((*valid_squares_mask>>target_pos)&1ULL == 1ULL)) // Check enemy diagonal up left
+            if (relation == ENEMY && ((*valid_squares_mask>>target_pos)&1ULL == 1ULL)) // Check enemy diagonal left
             {
-                move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_NORMAL};
-                (*move_count)++;
+                if (piece_pos>>3 == 7-start_rank) // If on the second-to-last rank, add promotion options
+                {
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_B};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_N};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_Q};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_R};
+                    (*move_count)++;
+                }
+                else
+                {
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_NORMAL};
+                    (*move_count)++;
+                }
             }
             else if (!is_on_start_rank && (relation == EMPTY_RELATION) && ((state->enPassantPos) == target_pos) && ((*valid_squares_mask>>target_pos)&1ULL == 1ULL)) // Check for en passant diagonal left
             {
@@ -971,8 +981,22 @@ void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *m
             relation = getRelationToSelf(self_piece, getPiece(state, target_pos));
             if (relation == ENEMY && ((*valid_squares_mask>>target_pos)&1ULL == 1ULL)) // Check enemy diagonal right
             {
-                move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_NORMAL};
-                (*move_count)++;
+                if (piece_pos>>3 == 7-start_rank) // If on the second-to-last rank, add promotion options
+                {
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_B};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_N};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_Q};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_R};
+                    (*move_count)++;
+                }
+                else
+                {
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_NORMAL};
+                    (*move_count)++;
+                }
             }
             else if (!is_on_start_rank && (relation == EMPTY_RELATION) && ((state->enPassantPos) == target_pos) && ((*valid_squares_mask>>target_pos)&1ULL == 1ULL)) // Check for en passant diagonal right
             {
@@ -983,10 +1007,27 @@ void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *m
             target_pos = getOffsetPosition(piece_pos, 0, y_direction);
             if (getRelationToSelf(self_piece, getPiece(state, target_pos)) == EMPTY_RELATION && ((*valid_squares_mask>>target_pos)&1ULL == 1ULL)) // Check forward 1
             {
-                move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_NORMAL};
-                (*move_count)++;
+                if (piece_pos>>3 == 7-start_rank) // If on the second-to-last rank, add promotion options
+                {
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_B};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_N};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_Q};
+                    (*move_count)++;
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_PROMOTION_R};
+                    (*move_count)++;
+                }
+                else
+                {
+                    move_list[*move_count] = (Move){piece_pos, target_pos, MOVE_NORMAL};
+                    (*move_count)++;
+                }
             }
-            else {break;} // Breaks if the up 1 square is occupied
+            else // Breaks if the up 1 square is occupied
+            {
+                break;
+            } 
 
             if (!is_on_start_rank) // Breaks if the pawn is not on the starting rank
             {

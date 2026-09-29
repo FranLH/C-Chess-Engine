@@ -1,9 +1,7 @@
 ------- TO D0 -------
-    - Castling movement rules
-      - Set castling right bits to 0 after castling
-      - Make king moves set the corresponding castling right bits to 0
-      - Make rook moves set the corresponding castling right bit to 0
-
+    - Implement game loop
+      - Flip turn bit (DONE)
+      - Win detection
     
 
     - IMPORTANT: make sure that the valid moves generator takes into account the fact that taking via en passant
