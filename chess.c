@@ -67,19 +67,35 @@ typedef struct
     // A1 (0) is at the least significant bit
     // H8 (63) is at the most significant bit
     // The 4 bitboards are in order, bb ID 0 has the MSB, and bb ID 3 has the LSB
-
     uint8_t enPassantPos; // default 0: no en passant.                --- 1 byte
-
     uint8_t metadata; // Stores castling rights and player to move.   --- 1 byte
-    
 } BoardState; // 34 bytes total
+
+typedef enum
+{
+    MATCH_ONGOING,
+    MATCH_WHITE_WIN,
+    MATCH_BLACK_WIN,
+    MATCH_DRAW
+} MatchState;
+
+typedef struct
+{
+    BoardState boardState;
+    uint8_t matchState;
+    // - 0: Ongoing match MATCH_ONGOING
+    // - 1: White wins    MATCH_WHITE_WIN
+    // - 2: Black wins    MATCH_BLACK_WIN
+    // - 3: Draw          MATCH_DRAW
+    // float timers[2]; // [white, black]
+} Match;
 
 typedef enum 
 {
     EMPTY_RELATION,
     FRIEND,
     ENEMY
-} Relation ;
+} Relation;
 
 typedef enum
 {
@@ -223,26 +239,35 @@ static inline uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy); // R
 static inline uint8_t getPiece(BoardState *state, uint8_t pos);
 static inline bool canCastle(BoardState *state, uint64_t *safe_squares, uint8_t color, uint8_t side);
 static inline Relation getRelationToSelf(uint8_t self, uint8_t other); // FRIEND, ENEMY or EMPTY_RELATION
+static inline void updateMatchState(bool can_move, bool is_in_check, bool white_to_move, uint8_t *match_state);
 void setPiece(BoardState *state, uint8_t pos, uint8_t piece); // Pos: [0-63], piece: {0:empty, [1-6]:white [9-14]:black}
 void makeMove(BoardState *state, Move *move);
 void printBoard(BoardState *state);
 void printMoves(BoardState *state, Move *moves, int move_count);
-void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mask, uint64_t enemy_pieces_mask); // Calculates the squares the enemy color is attacking (Including their own pieces)
+void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mask, uint64_t enemy_pieces_mask, uint8_t king_piece); // Calculates the squares the enemy color is attacking (Including their own pieces)
 void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint64_t *out_attackers_mask, uint64_t *out_attacked_squares_mask, uint8_t *out_king_pos, uint8_t *out_pin_attackers); // Calculates pins, checks and unsafe squares
-Move* getValidMoves(BoardState *state, int *move_count); // Generates all valid moves in the given board state, updates a move counter variable, returns pointer to a Move array
+Move* getValidMoves(BoardState *state, int *move_count, uint8_t *match_state); // Generates all valid moves in the given board state, updates a move counter variable, returns pointer to a Move array. Updates the match state variable (win detection)
 void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *move_count, uint64_t *valid_squares_mask);
+Match newMatch();
 
 int main()
 {
-    BoardState bstate = START_BOARD; // Default board
-    printBoard(&bstate);
+    Match match = newMatch();
+    BoardState *bstate = &match.boardState;
+    //BoardState bstate = START_BOARD; // Default board
+    setPiece(bstate, D1, BLACK_ROOK);
+    setPiece(bstate, F1, BLACK_ROOK);
+    printBoard(bstate);
     //bstate.metadata &= ~WHITE_TO_MOVE_FLAG;
 
-    // int moves_count = 0;
-    // Move *moves = getValidMoves(&bstate, &moves_count);
-    // printMoves(&bstate, moves, moves_count);
-    // makeMove(&bstate, &moves[0]);
-    // printBoard(&bstate);
+    int moves_count = 0;
+    Move *moves = getValidMoves(bstate, &moves_count, &match.matchState);
+    printMoves(bstate, moves, moves_count);
+    //makeMove(&match.boardState, &moves[0]);
+    //printBoard(&match.boardState);
+
+
+    printf("\nMatch: %d", match.matchState);
 
     return 0;
 }
@@ -452,13 +477,14 @@ static inline Relation getRelationToSelf(uint8_t self, uint8_t other)
     return FRIEND;
 }
 
-void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mask, uint64_t enemy_pieces_mask)
+void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mask, uint64_t enemy_pieces_mask, uint8_t king_piece)
 {
     uint8_t piece_pos;
     uint8_t self_piece;
     uint8_t target_pos;
     uint8_t other_piece;
     uint8_t relation;
+
     while (enemy_pieces_mask != 0) // Cycles through the enemy pieces
     {
         piece_pos = bitscanForward(enemy_pieces_mask);
@@ -497,7 +523,7 @@ void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mas
                     length = 1;
                     target_pos = getOffsetPosition(piece_pos, ORTHOGONAL_OFFSETS[i][0], ORTHOGONAL_OFFSETS[i][1]);
                     other_piece = getPiece(state, target_pos);
-                    while (other_piece == EMPTY_PIECE)
+                    while (other_piece == EMPTY_PIECE || other_piece == king_piece)
                     {
                         *out_attacked_squares_mask |= (1ULL << target_pos);
                         length++;
@@ -514,7 +540,7 @@ void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mas
                     length = 1;
                     target_pos = getOffsetPosition(piece_pos, DIAGONAL_OFFSETS[i][0], DIAGONAL_OFFSETS[i][1]);
                     other_piece = getPiece(state, target_pos);
-                    while (other_piece == EMPTY_PIECE)
+                    while (other_piece == EMPTY_PIECE || other_piece == king_piece)
                     {
                         *out_attacked_squares_mask |= (1ULL << target_pos);
                         length++;
@@ -548,7 +574,7 @@ void getAllAttackedSquares(BoardState *state, uint64_t *out_attacked_squares_mas
                     length = 1;
                     target_pos = getOffsetPosition(piece_pos, offsets_const[i][0], offsets_const[i][1]);
                     other_piece = getPiece(state, target_pos);
-                    while (other_piece == EMPTY_PIECE)
+                    while (other_piece == EMPTY_PIECE || other_piece == king_piece)
                     {
                         *out_attacked_squares_mask |= (1ULL << target_pos);
                         length++;
@@ -777,7 +803,7 @@ void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint
     }
     uint64_t occupied = state->board[0] | state->board[1] | state->board[2] | state->board[3]; // Gets all positions with pieces
     uint64_t enemy_pieces = occupied & ~(state->board[0]^(enemy_color_mask)); // Gets all friendly pieces positions
-    getAllAttackedSquares(state, out_attacked_squares_mask, enemy_pieces);
+    getAllAttackedSquares(state, out_attacked_squares_mask, enemy_pieces, self_piece);
 }
 
 void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *move_count, uint64_t *valid_squares_mask)
@@ -1047,7 +1073,7 @@ void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *m
     return;
 }
 
-Move *getValidMoves(BoardState *state, int *move_count)
+Move *getValidMoves(BoardState *state, int *move_count, uint8_t *match_state)
 {
     uint8_t king_pos;
     Move *all_valid_moves = (Move*)malloc(MAX_MOVES * sizeof(Move));
@@ -1069,12 +1095,16 @@ Move *getValidMoves(BoardState *state, int *move_count)
     piece_valid_squares_mask = ~attacked_squares_mask;
     getPieceMoves(state, king_pos, all_valid_moves, move_count, &piece_valid_squares_mask);
 
+
+
+
     if (attackers_mask!=0ULL) // If there is at least one check
     {
         uint8_t attacker_pos = bitscanForward(attackers_mask);
         attackers_mask &= (attackers_mask-1);
         if (attackers_mask!=0ULL) // Double check
         {
+            updateMatchState(move_count==0, attackers_mask!=0ULL, white_to_move, match_state);
             return all_valid_moves; // Just return king moves
         }
         else // single check
@@ -1121,5 +1151,34 @@ Move *getValidMoves(BoardState *state, int *move_count)
         }
         friendly_pieces &= (friendly_pieces-1); // Next piece
     }
+    // Win/loss/draw detection
+    updateMatchState(move_count==0, attackers_mask!=0ULL, white_to_move, match_state);
     return all_valid_moves;
+}
+
+static inline void updateMatchState(bool can_move, bool is_in_check, bool white_to_move, uint8_t *match_state)
+{
+    if (~can_move) // If no valid moves available
+    {
+        if (is_in_check) // If in check
+        {
+            if (white_to_move)
+            {
+                *match_state = MATCH_BLACK_WIN;
+            }
+            else
+            {
+                *match_state = MATCH_WHITE_WIN;
+            }
+        }
+        else
+        {
+            *match_state = MATCH_DRAW;
+        }
+    }
+}
+
+Match newMatch()
+{
+    return (Match){START_BOARD, MATCH_ONGOING};
 }

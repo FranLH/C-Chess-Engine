@@ -5,6 +5,7 @@
 
     - Add export to FEN and import from FEN
     
+    - BUGFIX: make king see-through to enemy sliding pieces (DONE)
 
     - IMPORTANT: make sure that the valid moves generator takes into account the fact that taking via en passant
                  can leave the king in check.
