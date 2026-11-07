@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -114,7 +115,7 @@ typedef enum
     WHITE_PAWN = 14
 } PieceType;
 
-static const char PIECE_CHARS[] = 
+static const char PIECE_CHARS[15] = 
 {
     [0] = '.', // empty
     [1] = 'k', // black
@@ -130,6 +131,9 @@ static const char PIECE_CHARS[] =
     [13] = 'N',
     [14] = 'P'
 };
+
+static const char MATCH_STATES[4][14] =
+{"Ongoing match","White wins","Black wins", "Draw"};
 
 static const char COORDINATES[64][3] =
 {
@@ -239,7 +243,8 @@ static inline uint8_t getOffsetPosition(uint8_t pos, int8_t dx, int8_t dy); // R
 static inline uint8_t getPiece(BoardState *state, uint8_t pos);
 static inline bool canCastle(BoardState *state, uint64_t *safe_squares, uint8_t color, uint8_t side);
 static inline Relation getRelationToSelf(uint8_t self, uint8_t other); // FRIEND, ENEMY or EMPTY_RELATION
-static inline void updateMatchState(bool can_move, bool is_in_check, bool white_to_move, uint8_t *match_state);
+static inline void updateMatchState(uint8_t can_move, uint8_t is_in_check, uint8_t white_to_move, uint8_t *match_state);
+static inline uint8_t positionFromText(char text[3], uint8_t *out_position);
 void setPiece(BoardState *state, uint8_t pos, uint8_t piece); // Pos: [0-63], piece: {0:empty, [1-6]:white [9-14]:black}
 void makeMove(BoardState *state, Move *move);
 void printBoard(BoardState *state);
@@ -249,25 +254,31 @@ void analyzeKingSafety(BoardState *state, uint64_t *out_pinned_pieces_mask, uint
 Move* getValidMoves(BoardState *state, int *move_count, uint8_t *match_state); // Generates all valid moves in the given board state, updates a move counter variable, returns pointer to a Move array. Updates the match state variable (win detection)
 void getPieceMoves(BoardState *state, uint8_t piece_pos, Move *move_list, int *move_count, uint64_t *valid_squares_mask);
 Match newMatch();
+void handlePlayerInput(Move *valid_moves, int move_count, Move *out_player_move);
 
 int main()
 {
     Match match = newMatch();
     BoardState *bstate = &match.boardState;
-    //BoardState bstate = START_BOARD; // Default board
-    setPiece(bstate, D1, BLACK_ROOK);
-    setPiece(bstate, F1, BLACK_ROOK);
-    printBoard(bstate);
+    
     //bstate.metadata &= ~WHITE_TO_MOVE_FLAG;
+    while (match.matchState==MATCH_ONGOING)
+    {
+        printBoard(bstate);
+        int moves_count = 0;
+        Move *moves = getValidMoves(bstate, &moves_count, &match.matchState);
+        Move player_move;
+        //printMoves(bstate, moves, moves_count);
+        handlePlayerInput(moves, moves_count, &player_move);
+        makeMove(bstate, &player_move);
 
-    int moves_count = 0;
-    Move *moves = getValidMoves(bstate, &moves_count, &match.matchState);
-    printMoves(bstate, moves, moves_count);
+
+        //printMoves(bstate, moves, moves_count);
+    }
+
     //makeMove(&match.boardState, &moves[0]);
     //printBoard(&match.boardState);
-
-
-    printf("\nMatch: %d", match.matchState);
+    printf("\n%s", MATCH_STATES[match.matchState]);
 
     return 0;
 }
@@ -385,12 +396,48 @@ void makeMove(BoardState *state, Move *move)
         state->metadata &= ~BLACK_CAN_CASTLE_Q_FLAG; // Prevent castling again
         break;
     case MOVE_PROMOTION_Q:
+        setPiece(state, move->from, EMPTY_PIECE);
+        if (white_to_move)
+        {
+            setPiece(state, move->to, WHITE_QUEEN);
+        }
+        else
+        {
+            setPiece(state, move->to, BLACK_QUEEN);
+        }
         break;
     case MOVE_PROMOTION_R:
+        setPiece(state, move->from, EMPTY_PIECE);
+        if (white_to_move)
+        {
+            setPiece(state, move->to, WHITE_ROOK);
+        }
+        else
+        {
+            setPiece(state, move->to, BLACK_ROOK);
+        }
         break;
     case MOVE_PROMOTION_B:
+        setPiece(state, move->from, EMPTY_PIECE);
+        if (white_to_move)
+        {
+            setPiece(state, move->to, WHITE_BISHOP);
+        }
+        else
+        {
+            setPiece(state, move->to, BLACK_BISHOP);
+        }
         break;
     case MOVE_PROMOTION_N:
+        setPiece(state, move->from, EMPTY_PIECE);
+        if (white_to_move)
+        {
+            setPiece(state, move->to, WHITE_KNIGHT);
+        }
+        else
+        {
+            setPiece(state, move->to, BLACK_KNIGHT);
+        }
         break;
     default:
         break;
@@ -401,31 +448,31 @@ void makeMove(BoardState *state, Move *move)
 void printBoard(BoardState *state)
 {
     printf("\n");
-    if (state->metadata & WHITE_TO_MOVE_FLAG)
-    {
-        printf("White to move\n");
-    }
-    else
-    {
-        printf("Black to move\n");
-    }
-    if (state->metadata & WHITE_CAN_CASTLE_K_FLAG)
-    {
-        printf("White can castle kingside\n");
-    }
-    if (state->metadata & WHITE_CAN_CASTLE_Q_FLAG)
-    {
-        printf("White can castle queenside\n");
-    }
-    if (state->metadata & BLACK_CAN_CASTLE_K_FLAG)
-    {
-        printf("Black can castle kingside\n");
-    }
-    if (state->metadata & BLACK_CAN_CASTLE_Q_FLAG)
-    {
-        printf("Black can castle queenside\n");
-    }
-    printf("En passant at %s\n", COORDINATES[state->enPassantPos]);
+    // if (state->metadata & WHITE_TO_MOVE_FLAG)
+    // {
+    //     printf("White to move\n");
+    // }
+    // else
+    // {
+    //     printf("Black to move\n");
+    // }
+    // if (state->metadata & WHITE_CAN_CASTLE_K_FLAG)
+    // {
+    //     printf("White can castle kingside\n");
+    // }
+    // if (state->metadata & WHITE_CAN_CASTLE_Q_FLAG)
+    // {
+    //     printf("White can castle queenside\n");
+    // }
+    // if (state->metadata & BLACK_CAN_CASTLE_K_FLAG)
+    // {
+    //     printf("Black can castle kingside\n");
+    // }
+    // if (state->metadata & BLACK_CAN_CASTLE_Q_FLAG)
+    // {
+    //     printf("Black can castle queenside\n");
+    // }
+    // printf("En passant at %s\n", COORDINATES[state->enPassantPos]);
     printf(" ________________\n");
     for (int i = 7; i>=0; i--)
     {   
@@ -437,6 +484,14 @@ void printBoard(BoardState *state)
     }
     //printf("-|-|-|-|-|-|-|-\n");
     printf(" a|b|c|d|e|f|g|h|\n\n");
+    if (state->metadata & WHITE_TO_MOVE_FLAG)
+    {
+        printf("White to move\n");
+    }
+    else
+    {
+        printf("Black to move\n");
+    }
 }
 void printMoves(BoardState *state, Move *moves, int move_count)
 {
@@ -1135,7 +1190,6 @@ Move *getValidMoves(BoardState *state, int *move_count, uint8_t *match_state)
     uint64_t occupied = state->board[0] | state->board[1] | state->board[2] | state->board[3]; // Gets all positions with pieces
     uint64_t friendly_pieces = occupied & ~(state->board[0]^(friendly_color_mask)); // Gets all friendly pieces positions
     friendly_pieces &= ~(1ULL<<king_pos); // Don't generate king moves here
-    printf("\nvalid squares %llu\n", valid_squares_mask);
     while (friendly_pieces != 0)
     {
         uint8_t piece_pos = bitscanForward(friendly_pieces);
@@ -1152,13 +1206,14 @@ Move *getValidMoves(BoardState *state, int *move_count, uint8_t *match_state)
         friendly_pieces &= (friendly_pieces-1); // Next piece
     }
     // Win/loss/draw detection
-    updateMatchState(move_count==0, attackers_mask!=0ULL, white_to_move, match_state);
+    updateMatchState((move_count!=0), (attackers_mask!=0ULL), white_to_move, match_state);
+    
     return all_valid_moves;
 }
 
-static inline void updateMatchState(bool can_move, bool is_in_check, bool white_to_move, uint8_t *match_state)
+static inline void updateMatchState(uint8_t can_move, uint8_t is_in_check, uint8_t white_to_move, uint8_t *match_state)
 {
-    if (~can_move) // If no valid moves available
+    if (!can_move) // If no valid moves available
     {
         if (is_in_check) // If in check
         {
@@ -1181,4 +1236,80 @@ static inline void updateMatchState(bool can_move, bool is_in_check, bool white_
 Match newMatch()
 {
     return (Match){START_BOARD, MATCH_ONGOING};
+}
+
+void handlePlayerInput(Move *valid_moves, int move_count, Move *out_player_move)
+{
+    while (1)
+    {
+        printf("\nWrite the coordinates of a piece to move, or write 'exit' to close the game: ");
+        char input[5];
+        uint8_t from;
+        scanf("%s", input);
+        if (strcmp(input, "exit") == 0)
+        {
+            printf("\nexiting program...");
+            exit(EXIT_SUCCESS);
+        }
+        if (strlen(input) != 2 || !positionFromText(input, &from))
+        {
+            printf("\nInvalid input.");
+            continue;
+        }
+        uint8_t to;
+        printf("\nWrite the coordinates you want to move the piece to: ");
+        scanf("%s", input);
+        if (strlen(input) != 2 || !positionFromText(input, &to))
+        {
+            printf("\nInvalid input.");
+            continue;
+        }
+        uint8_t valid_move = 0;
+        Move *move;
+        for (int i = 0; i<move_count; i++)
+        {
+            move = &valid_moves[i];
+            if (move->from == from && move->to == to)
+            {
+                valid_move = 1;
+                break;
+            }
+        }
+        if (!valid_move)
+        {
+            printf("\nInvalid move.");
+            continue;
+        }
+        *out_player_move = *move;
+        break;
+    }
+    // printf("\nfile:%d", file); // 65 -> 72 A-H; 97 -> 104 a-h; 49 -> 56 1-8
+}
+
+static inline uint8_t positionFromText(char *input, uint8_t *out_position)
+{
+    uint8_t file = input[0];
+    uint8_t rank = input[1];
+    if (file>=65 && file<=72) // uppercase
+    {
+        file -= 65;
+    }
+    else if (file>=97 && file<=104) // lowercase
+    {
+        file -= 97;
+    }
+    else
+    {
+        return 0;
+    }
+    if (rank>=49 && rank<=56) // uppercase
+    {
+        rank -= 49;
+    }
+    else
+    {
+        return 0;
+    }
+    *out_position = file + rank*8;
+    return 1;
 }
